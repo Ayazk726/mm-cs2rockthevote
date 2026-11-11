@@ -19,6 +19,8 @@ struct MapEntry
 	bool dynamic = false;
 	// CS2KZ nub_tier per course (1-10), in course order. One entry per course that
 	// has a tier for that mode. Empty = unknown.
+	// Filled from the CS2KZ API, or from maplist.txt's trailing tier field (one
+	// value per mode); the API's tiers replace them when it has any.
 	std::vector<int> classicTiers;
 	std::vector<int> vanillaTiers;
 };
@@ -153,7 +155,8 @@ private:
 	// game thread and the HTTP worker thread, hence atomic.
 	std::atomic<bool> m_tierFetchInFlight {false};
 
-	// Fill an entry's tiers from m_tierCache if not already set.
+	// Fill an entry's tiers from m_tierCache. The CS2KZ API wins over a tier read
+	// from maplist.txt, per mode: a mode the API has no tier for keeps the local one.
 	void ApplyCachedTiers(MapEntry &e) const;
 
 	// Paginate the CS2KZ approved-maps endpoint, parsing tiers into each entry.

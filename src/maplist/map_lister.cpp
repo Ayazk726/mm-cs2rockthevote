@@ -1,4 +1,5 @@
 #include "map_lister.h"
+#include "map_list_line.h"
 #include "utils/str.h"
 #include "utils/log.h"
 #include "utils/maplist.h"
@@ -152,17 +153,27 @@ std::string MapLister::StripAnnotation(const std::string &displayName)
 
 bool MapLister::ParseLine(const std::string &rawLine, MapEntry &out)
 {
-	mmu::MapListEntry parsed;
-	if (!mmu::ParseMapListLine(rawLine, parsed))
+	MapListLine parsed;
+	if (!maplist_line::ParseLine(rawLine, parsed))
 	{
 		return false;
 	}
 
-	// Tiers are filled in later by ApplyCachedTiers.
-	out.displayName = parsed.displayName;
-	out.mapName = parsed.mapName;
-	out.workshopId = parsed.workshopId;
-	out.isWorkshop = parsed.isWorkshop;
+	out.displayName = parsed.map.displayName;
+	out.mapName = parsed.map.mapName;
+	out.workshopId = parsed.map.workshopId;
+	out.isWorkshop = parsed.map.isWorkshop;
+
+	// Tiers written in the file are a fallback for what the API has no tier for;
+	// ApplyCachedTiers overwrites a mode with the API's tiers when it has them.
+	if (parsed.classicTier > 0)
+	{
+		out.classicTiers.assign(1, parsed.classicTier);
+	}
+	if (parsed.vanillaTier > 0)
+	{
+		out.vanillaTiers.assign(1, parsed.vanillaTier);
+	}
 	return true;
 }
 
@@ -300,6 +311,7 @@ int MapLister::LoadFromFile(const char *path)
 	}
 
 	std::unordered_set<std::string> seen;
+	int localTiers = 0;
 	char line[512];
 	while (fgets(line, sizeof(line), fp))
 	{
@@ -313,10 +325,19 @@ int MapLister::LoadFromFile(const char *path)
 			MMU_LOG_WARN("maplist.txt lists '%s' more than once, keeping the first entry.\n", entry.mapName.c_str());
 			continue;
 		}
+		if (!entry.classicTiers.empty() || !entry.vanillaTiers.empty())
+		{
+			localTiers++;
+		}
 		m_maps.push_back(std::move(entry));
 	}
 
 	fclose(fp);
+
+	if (localTiers > 0)
+	{
+		MMU_LOG_INFO("maplist.txt: %d of %d maps have local CS2KZ tiers.\n", localTiers, static_cast<int>(m_maps.size()));
+	}
 
 	// Apply any already-cached CS2KZ tiers to the freshly loaded entries.
 	for (auto &e : m_maps)
@@ -862,14 +883,20 @@ void MapLister::FetchTiersAsync()
 
 void MapLister::ApplyCachedTiers(MapEntry &e) const
 {
-	if (!e.classicTiers.empty() || !e.vanillaTiers.empty())
+	auto it = m_tierCache.find(str::ToLower(e.mapName));
+	if (it == m_tierCache.end())
 	{
 		return;
 	}
-	auto it = m_tierCache.find(str::ToLower(e.mapName));
-	if (it != m_tierCache.end())
+
+	// The API wins over a tier read from maplist.txt, per mode: a mode the API has
+	// no tier for keeps the local one.
+	if (!it->second.classic.empty())
 	{
 		e.classicTiers = it->second.classic;
+	}
+	if (!it->second.vanilla.empty())
+	{
 		e.vanillaTiers = it->second.vanilla;
 	}
 }

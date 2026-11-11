@@ -1,9 +1,22 @@
 // CS2RTV Map List
 // Format: one map per line
 //
-// mapname              - stock/server map (uses ChangeLevel)
-// mapname:workshopid   - workshop map (uses host_workshop_map)
-// display name:workshopid - workshop map with custom display name
+// mapname                        - stock/server map (uses ChangeLevel)
+// mapname:workshopid             - workshop map (uses host_workshop_map)
+// display name:workshopid        - workshop map with custom display name
+//
+// A trailing tier field is optional and is shown when DisplayKzTiers is enabled.
+// It uses the CS2KZ website's map list format: the classic (CKZ) tier, then the
+// vanilla (VNL) tier in parentheses.
+//
+// mapname:workshopid:ckz         - classic tier only, e.g. "kz_igneous:3102712799:3"
+// mapname:workshopid:ckz(vnl)    - both tiers, e.g. "kz_igneous:3102712799:3(3)"
+//
+// Tiers are 1-10. A missing or invalid value means this file has no tier: the
+// CS2KZ API is still queried and its tier, if any, is shown instead. Tiers are
+// not shown only when neither source has one. API tiers take precedence.
+// A line with just a workshop id keeps its old meaning: "kz_grotto:2" is
+// workshop id 2, not tier 2.
 //
 // Rename this file or create a new file called maplist.txt for your actual maplist.
 //
@@ -16,3 +29,5 @@ cs_italy
 
 kz_grotto:3121168339
 kz_lumen (T3):3429375699
+kz_igneous:3102712799:3(3)
+kz_concord:3287874815
