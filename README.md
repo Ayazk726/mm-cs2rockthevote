@@ -27,7 +27,7 @@ This stops players from spamming it on join before getting kicked to trigger a v
 ### Configuration
 
 - `/cfg/cs2rtv/core.cfg` - Main config file
-- `/cfg/maplist.txt` - Maplist file (unused with `KzApiMaplist`). A line can carry the CS2KZ tiers as a trailing field, `mapname:workshopid:ckz(vnl)` (see `maplist.example.txt`); `DisplayKzTiers` shows them, and tiers from the CS2KZ API take precedence over them.
+- `/cfg/maplist.txt` - Maplist file (unused with `KzApiMaplist 1`, extra maps on top of the API's with `KzApiMaplist 2`). A line can carry the CS2KZ tiers as a trailing field, `mapname:workshopid:ckz(vnl)` (see `maplist.example.txt`), or as a display-name annotation, `mapname (T3)` / `mapname (CKZ 3, VNL 4)`; `DisplayKzTiers` shows them, and tiers from the CS2KZ API take precedence over both.
 
 ### Commands
 

@@ -150,6 +150,34 @@ std::string MapLister::StripAnnotation(const std::string &displayName)
 	return mmu::StripMapAnnotation(displayName);
 }
 
+// The 1-10 number after `label` in a lowercased annotation ("t3", "ckz: 3", "vnl 4"), 0 without one.
+static int AnnotationTier(const std::string &annotation, const std::string &label)
+{
+	for (size_t pos = annotation.find(label); pos != std::string::npos; pos = annotation.find(label, pos + 1))
+	{
+		if (pos > 0 && std::isalnum(static_cast<unsigned char>(annotation[pos - 1])))
+		{
+			continue;
+		}
+		size_t start = pos + label.size();
+		while (start < annotation.size() && (annotation[start] == ' ' || annotation[start] == ':'))
+		{
+			start++;
+		}
+		size_t end = start;
+		while (end < annotation.size() && std::isdigit(static_cast<unsigned char>(annotation[end])))
+		{
+			end++;
+		}
+		int tier = end > start && end - start <= 2 ? std::atoi(annotation.substr(start, end - start).c_str()) : 0;
+		if (tier >= 1 && tier <= 10)
+		{
+			return tier;
+		}
+	}
+	return 0;
+}
+
 namespace
 {
 	// CS2KZ's nub_tier range.
@@ -216,89 +244,105 @@ namespace
 		return true;
 	}
 
-	// Parses one maplist.txt line: the mmu::ParseMapListLine format plus an optional
-	// trailing tier field, "name:workshopid:ckz(vnl)". Returns false for blanks and
-	// comments, as mmu::ParseMapListLine does.
-	bool ParseMapListLineWithTiers(const std::string &rawLine, mmu::MapListEntry &map, int &classicTier, int &vanillaTier)
+	// Strips the optional trailing CS2KZ website tier field from a maplist line,
+	// "name:workshopid:ckz(vnl)", into the two tier values. Lines that are blank,
+	// comments, or only carry a workshop id are left untouched.
+	void ExtractTierField(std::string &line, int &classicTier, int &vanillaTier)
 	{
 		classicTier = 0;
 		vanillaTier = 0;
 
-		std::string line = str::Trim(rawLine);
+		line = str::Trim(line);
 		if (line.empty() || line[0] == '#' || line[0] == '/' || line[0] == ';')
 		{
-			return false;
+			return;
 		}
 
-		// The tier field is last, after the workshop id: "name:workshopid:ckz(vnl)".
 		const size_t lastColon = line.rfind(':');
-		if (lastColon != std::string::npos)
+		if (lastColon == std::string::npos)
 		{
-			int classic = 0;
-			int vanilla = 0;
-			const std::string tail = str::Trim(line.substr(lastColon + 1));
-			if (ParseTierField(tail, classic, vanilla))
-			{
-				const std::string rest = str::Trim(line.substr(0, lastColon));
-				const size_t idColon = rest.rfind(':');
-				const bool afterWorkshopId = idColon != std::string::npos && IsAllDigits(str::Trim(rest.substr(idColon + 1)));
-				// Without a workshop id before it, "kz_grotto:2" keeps meaning a
-				// workshop id. The "(n)" part alone is unambiguous.
-				if (afterWorkshopId || tail.find('(') != std::string::npos)
-				{
-					classicTier = classic;
-					vanillaTier = vanilla;
-					line = rest;
-				}
-			}
+			return;
 		}
 
-		return mmu::ParseMapListLine(line, map);
+		const std::string tail = str::Trim(line.substr(lastColon + 1));
+		int classic = 0;
+		int vanilla = 0;
+		if (!ParseTierField(tail, classic, vanilla))
+		{
+			return;
+		}
+
+		const std::string rest = str::Trim(line.substr(0, lastColon));
+		const size_t idColon = rest.rfind(':');
+		const bool afterWorkshopId = idColon != std::string::npos && IsAllDigits(str::Trim(rest.substr(idColon + 1)));
+		// Without a workshop id before it, "kz_grotto:2" keeps meaning a workshop
+		// id. The "(n)" part alone is unambiguous.
+		if (afterWorkshopId || tail.find('(') != std::string::npos)
+		{
+			classicTier = classic;
+			vanillaTier = vanilla;
+			line = rest;
+		}
 	}
 } // namespace
 
 bool MapLister::ParseLine(const std::string &rawLine, MapEntry &out)
 {
+	std::string line = rawLine;
+	int localClassic = 0;
+	int localVanilla = 0;
+	ExtractTierField(line, localClassic, localVanilla);
+
 	mmu::MapListEntry parsed;
-	int classicTier = 0;
-	int vanillaTier = 0;
-	if (!ParseMapListLineWithTiers(rawLine, parsed, classicTier, vanillaTier))
+	if (!mmu::ParseMapListLine(line, parsed))
 	{
 		return false;
 	}
 
+	// Tiers are filled in later by ApplyCachedTiers.
 	out.displayName = parsed.displayName;
 	out.mapName = parsed.mapName;
 	out.workshopId = parsed.workshopId;
 	out.isWorkshop = parsed.isWorkshop;
 
-	// Tiers written in the file are a fallback for what the API has no tier for;
-	// ApplyCachedTiers overwrites a mode with the API's tiers when it has them.
+	// "(T3)" is both modes.
+	std::string annotation = str::ToLower(out.displayName.substr(out.mapName.size()));
+	int both = AnnotationTier(annotation, "t");
+	int classic = AnnotationTier(annotation, "ckz");
+	int vanilla = AnnotationTier(annotation, "vnl");
+
+	// An explicit trailing tier field wins over a display-name annotation.
+	int classicTier = localClassic != 0 ? localClassic : (classic != 0 ? classic : both);
+	int vanillaTier = localVanilla != 0 ? localVanilla : (vanilla != 0 ? vanilla : both);
 	if (classicTier > 0)
 	{
-		out.classicTiers.assign(1, classicTier);
+		out.classicTiers = {classicTier};
 	}
 	if (vanillaTier > 0)
 	{
-		out.vanillaTiers.assign(1, vanillaTier);
+		out.vanillaTiers = {vanillaTier};
 	}
 	return true;
 }
 
 void MapLister::LoadForMap(const char *path)
 {
-	m_apiPool = g_RTVConfig.general.kzApiMaplist;
+	m_apiPool = g_RTVConfig.general.kzApiMaplist != 0;
+	m_fileExtras = g_RTVConfig.general.kzApiMaplist == 2;
 	if (!m_apiPool)
 	{
 		LoadFromFile(path);
 		return;
 	}
 
+	m_lastPath = path;
 	if (!m_poolLoaded)
 	{
 		// Left over from file mode.
 		m_maps.clear();
 	}
+	// Mode 2 has maplist.txt alone until the API answers.
+	BuildPool();
 	if (NeedsRefresh())
 	{
 		RefreshAsync();
@@ -341,16 +385,32 @@ void MapLister::RefreshAsync(std::function<void(int)> onDone)
 				{
 					m_refreshInFlight = false;
 
+					// Landed after a switch to maplist.txt mode.
+					if (!m_apiPool)
+					{
+						if (onDone)
+						{
+							onDone(-1);
+						}
+						return;
+					}
+
 					if (fresh->empty())
 					{
-						MMU_LOG_WARN("CS2KZ map pool fetch failed or returned no maps.%s\n", m_poolLoaded ? " Keeping the previous pool." : "");
+						// So !reloadmaps still rereads maplist.txt.
+						BuildPool();
+						const char *keeping = m_poolLoaded   ? " Keeping the previous pool."
+											  : m_extras > 0 ? " Using the maplist.txt maps until it loads."
+															 : "";
+						MMU_LOG_WARN("CS2KZ map pool fetch failed or returned no maps.%s\n", keeping);
 						if (!m_poolLoaded)
 						{
 							g_Timers.KillTimer(m_retryTimerId);
+							// Not PoolPending: maplist.txt standing in must not stop the retries.
 							m_retryTimerId = g_Timers.CreateTimer(kRetrySeconds,
 																  [this]()
 																  {
-																	  if (PoolPending())
+																	  if (ApiPending())
 																	  {
 																		  RefreshAsync();
 																	  }
@@ -364,7 +424,15 @@ void MapLister::RefreshAsync(std::function<void(int)> onDone)
 					}
 
 					ApplyPool(std::move(*fresh));
-					MMU_LOG_INFO("Map pool loaded: %d maps from the CS2KZ API.\n", static_cast<int>(m_maps.size()));
+					if (m_fileExtras)
+					{
+						MMU_LOG_INFO("Map pool loaded: %d maps from the CS2KZ API, %d more from maplist.txt.\n", static_cast<int>(m_apiMaps.size()),
+									 m_extras);
+					}
+					else
+					{
+						MMU_LOG_INFO("Map pool loaded: %d maps from the CS2KZ API.\n", static_cast<int>(m_apiMaps.size()));
+					}
 
 					if (g_RTVConfig.general.mapValidationEnabled && !g_RTVConfig.general.steamApiKey.empty())
 					{
@@ -381,70 +449,79 @@ void MapLister::RefreshAsync(std::function<void(int)> onDone)
 
 void MapLister::ApplyPool(std::vector<MapEntry> fresh)
 {
+	m_apiMaps = std::move(fresh);
+	m_poolLoaded = true;
+	m_lastRefresh = std::chrono::steady_clock::now();
+	BuildPool();
+}
+
+void MapLister::BuildPool()
+{
 	std::vector<MapEntry> old = std::move(m_maps);
-	m_maps = std::move(fresh);
+	m_maps = m_apiMaps;
+
+	// FindExact per entry took 100 ms for 1000 maps.
+	std::unordered_set<std::string> names;
+	std::unordered_set<std::string> ids;
+	auto note = [&](const MapEntry &e)
+	{
+		names.insert(str::ToLower(e.displayName));
+		names.insert(str::ToLower(e.mapName));
+		if (e.isWorkshop)
+		{
+			ids.insert(e.workshopId);
+		}
+	};
+	auto inPool = [&](const MapEntry &e) { return names.count(str::ToLower(e.mapName)) || (!e.workshopId.empty() && ids.count(e.workshopId)); };
+	auto append = [&](MapEntry &e)
+	{
+		note(e);
+		m_maps.push_back(std::move(e));
+	};
+	for (const auto &e : m_maps)
+	{
+		note(e);
+	}
+
+	m_extras = 0;
+	std::vector<MapEntry> file;
+	// Missing maplist.txt: no extras, nothing generated.
+	if (m_fileExtras && ReadFile(m_lastPath.c_str(), file))
+	{
+		for (auto &e : file)
+		{
+			if (!inPool(e))
+			{
+				append(e);
+				m_extras++;
+			}
+		}
+	}
 
 	// Keep off-pool nominations resolvable.
 	for (auto &e : old)
 	{
-		if (!e.dynamic)
+		if (e.dynamic && !inPool(e))
 		{
-			continue;
-		}
-		bool inPool = FindExact(e.mapName) != nullptr || (!e.workshopId.empty() && FindByWorkshopId(e.workshopId) != nullptr);
-		if (!inPool)
-		{
-			m_maps.push_back(std::move(e));
+			append(e);
 		}
 	}
-
-	m_poolLoaded = true;
-	m_lastRefresh = std::chrono::steady_clock::now();
 }
 
 int MapLister::LoadFromFile(const char *path)
 {
 	m_maps.clear();
 	m_poolLoaded = false;
+	m_apiMaps.clear();
 	m_lastPath = path;
 
-	FILE *fp = fopen(path, "r");
-	if (!fp)
+	if (!ReadFile(path, m_maps))
 	{
 		MMU_LOG_WARN("maplist.txt not found at '%s' - attempting "
 					 "auto-generate from CS2KZ API.\n",
 					 path);
 		GenerateMaplistAsync(path);
 		return -1;
-	}
-
-	std::unordered_set<std::string> seen;
-	int localTiers = 0;
-	char line[512];
-	while (fgets(line, sizeof(line), fp))
-	{
-		MapEntry entry;
-		if (!ParseLine(std::string(line), entry))
-		{
-			continue;
-		}
-		if (!seen.insert(str::ToLower(entry.mapName)).second)
-		{
-			MMU_LOG_WARN("maplist.txt lists '%s' more than once, keeping the first entry.\n", entry.mapName.c_str());
-			continue;
-		}
-		if (!entry.classicTiers.empty() || !entry.vanillaTiers.empty())
-		{
-			localTiers++;
-		}
-		m_maps.push_back(std::move(entry));
-	}
-
-	fclose(fp);
-
-	if (localTiers > 0)
-	{
-		MMU_LOG_INFO("maplist.txt: %d of %d maps have local CS2KZ tiers.\n", localTiers, static_cast<int>(m_maps.size()));
 	}
 
 	// Apply any already-cached CS2KZ tiers to the freshly loaded entries.
@@ -467,6 +544,46 @@ int MapLister::LoadFromFile(const char *path)
 	}
 
 	return static_cast<int>(m_maps.size());
+}
+
+bool MapLister::ReadFile(const char *path, std::vector<MapEntry> &out)
+{
+	FILE *fp = fopen(path, "r");
+	if (!fp)
+	{
+		return false;
+	}
+
+	std::unordered_set<std::string> seen;
+	int localTiers = 0;
+	char line[512];
+	while (fgets(line, sizeof(line), fp))
+	{
+		MapEntry entry;
+		if (!ParseLine(std::string(line), entry))
+		{
+			continue;
+		}
+		if (!seen.insert(str::ToLower(entry.mapName)).second)
+		{
+			MMU_LOG_WARN("maplist.txt lists '%s' more than once, keeping the first entry.\n", entry.mapName.c_str());
+			continue;
+		}
+		if (!entry.classicTiers.empty() || !entry.vanillaTiers.empty())
+		{
+			localTiers++;
+		}
+		out.push_back(std::move(entry));
+	}
+
+	fclose(fp);
+
+	if (localTiers > 0)
+	{
+		MMU_LOG_INFO("maplist.txt: %d of %d maps have local CS2KZ tiers.\n", localTiers, static_cast<int>(out.size()));
+	}
+
+	return true;
 }
 
 int MapLister::Reload()
@@ -996,9 +1113,7 @@ void MapLister::ApplyCachedTiers(MapEntry &e) const
 	{
 		return;
 	}
-
-	// The API wins over a tier read from maplist.txt, per mode: a mode the API has
-	// no tier for keeps the local one.
+	// Per mode, the API wins over an annotation's tier.
 	if (!it->second.classic.empty())
 	{
 		e.classicTiers = it->second.classic;

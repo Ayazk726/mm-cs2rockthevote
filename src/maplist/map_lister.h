@@ -19,8 +19,6 @@ struct MapEntry
 	bool dynamic = false;
 	// CS2KZ nub_tier per course (1-10), in course order. One entry per course that
 	// has a tier for that mode. Empty = unknown.
-	// Filled from the CS2KZ API, or from maplist.txt's trailing tier field (one
-	// value per mode); the API's tiers replace them when it has any.
 	std::vector<int> classicTiers;
 	std::vector<int> vanillaTiers;
 };
@@ -43,10 +41,21 @@ public:
 		return m_apiPool;
 	}
 
+	bool UsesFileExtras() const
+	{
+		return m_fileExtras;
+	}
+
 	// API mode with no pool fetched yet.
-	bool PoolPending() const
+	bool ApiPending() const
 	{
 		return m_apiPool && !m_poolLoaded;
+	}
+
+	// And no maplist.txt maps standing in.
+	bool PoolPending() const
+	{
+		return ApiPending() && m_extras == 0;
 	}
 
 	// onDone(count) runs on the game thread, -1 on failure or when a fetch is already running.
@@ -139,12 +148,17 @@ private:
 	static constexpr float kRetrySeconds = 30.0f;
 	int m_retryTimerId = -1;
 	bool m_apiPool = false;
+	bool m_fileExtras = false;
 	bool m_poolLoaded = false;
 	bool m_refreshInFlight = false;
 	std::chrono::steady_clock::time_point m_lastRefresh;
 
+	std::vector<MapEntry> m_apiMaps; // empty while ApiPending
+	int m_extras = 0;
+
 	bool NeedsRefresh() const;
 	void ApplyPool(std::vector<MapEntry> fresh);
+	void BuildPool();
 
 	// Cache of CS2KZ tiers keyed by lowercased clean map name -> {classic, vanilla}.
 	// Populated by FetchTiersAsync(); read/written on the game thread only.
@@ -166,6 +180,9 @@ private:
 	// Parse a single line into a MapEntry. Returns false if line should be
 	// skipped.
 	static bool ParseLine(const std::string &line, MapEntry &out);
+
+	// Appends to out. False when the file cannot be opened.
+	static bool ReadFile(const char *path, std::vector<MapEntry> &out);
 
 	// Strip the annotation part: "kz_grotto (T3)" -> "kz_grotto"
 	static std::string StripAnnotation(const std::string &displayName);
